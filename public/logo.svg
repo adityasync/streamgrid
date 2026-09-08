@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 72">
+  <!-- App header lockup: icon + wordmark, transparent BG to sit on #141619 topbar -->
+  <svg x="0" y="4" width="64" height="64" viewBox="0 0 64 64">
+    <rect width="64" height="64" rx="12" fill="#FFB000"/>
+    <rect x="10" y="10" width="12" height="12" rx="2" fill="#141619"/>
+    <rect x="26" y="10" width="12" height="12" rx="2" fill="#141619"/>
+    <rect x="42" y="10" width="12" height="12" rx="2" fill="#141619"/>
+    <rect x="10" y="26" width="12" height="12" rx="2" fill="#141619"/>
+    <rect x="26" y="26" width="12" height="12" rx="2" fill="#141619"/>
+    <rect x="42" y="26" width="12" height="12" rx="2" fill="#141619"/>
+    <rect x="10" y="42" width="12" height="12" rx="2" fill="#141619"/>
+    <rect x="26" y="42" width="12" height="12" rx="2" fill="#141619"/>
+    <rect x="42" y="42" width="12" height="12" rx="2" fill="#141619"/>
+    <path d="M30 28.8v6.4L35 32z" fill="#FFB000"/>
+  </svg>
+  <g font-family="'JetBrains Mono','IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace">
+    <text x="76" y="33" font-size="24" font-weight="800" letter-spacing="1.5" fill="#D6D9DD">STREAMGRID<tspan fill="#FFB000">//</tspan></text>
+    <text x="77" y="54" font-size="12.5" font-weight="400" letter-spacing="3.2" fill="#8A919A">MULTI-SOURCE VIEW GRID</text>
+  </g>
+</svg>

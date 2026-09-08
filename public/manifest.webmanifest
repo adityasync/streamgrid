@@ -1,0 +1,10 @@
+{
+  "name": "StreamGrid — Watch Many Streams Together",
+  "short_name": "StreamGrid",
+  "description": "Watch up to 9 Twitch, YouTube, Kick and more streams together in one grid.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#191b1e",
+  "theme_color": "#191b1e",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

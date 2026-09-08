@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#191B1E"/>
+  <defs>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" fill="none" stroke="#FFFFFF" stroke-opacity="0.05" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <rect x="0" y="0" width="1200" height="630" fill="none" stroke="#3A4048" stroke-width="4"/>
+  <!-- Left: big mark -->
+  <g transform="translate(90,175)">
+    <rect width="280" height="280" rx="48" fill="#141619" stroke="#3A4048" stroke-width="4"/>
+    <rect x="38" y="38" width="58" height="58" rx="8" fill="#3A4048"/>
+    <rect x="111" y="38" width="58" height="58" rx="8" fill="#3A4048"/>
+    <rect x="184" y="38" width="58" height="58" rx="8" fill="#3A4048"/>
+    <rect x="38" y="111" width="58" height="58" rx="8" fill="#3A4048"/>
+    <rect x="111" y="111" width="58" height="58" rx="8" fill="#FFB000"/>
+    <rect x="184" y="111" width="58" height="58" rx="8" fill="#3A4048"/>
+    <rect x="38" y="184" width="58" height="58" rx="8" fill="#3A4048"/>
+    <rect x="111" y="184" width="58" height="58" rx="8" fill="#3A4048"/>
+    <rect x="184" y="184" width="58" height="58" rx="8" fill="#D6D9DD"/>
+    <path d="M130 121v38L161 140z" fill="#141619"/>
+  </g>
+  <g font-family="'JetBrains Mono','IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace">
+    <text x="420" y="240" font-size="84" font-weight="800" letter-spacing="2" fill="#D6D9DD">STREAMGRID<tspan fill="#FFB000">//</tspan></text>
+    <text x="424" y="295" font-size="26" letter-spacing="6" fill="#8A919A">MULTI-SOURCE VIEW GRID</text>
+    <rect x="424" y="330" width="620" height="4" fill="#FFB000"/>
+    <text x="424" y="385" font-size="30" font-weight="700" fill="#D6D9DD">WATCH UP TO 9 STREAMS TOGETHER</text>
+    <text x="424" y="425" font-size="24" fill="#8A919A">TWITCH · YOUTUBE · KICK · RUMBLE · +12 MORE</text>
+    <text x="424" y="470" font-size="22" fill="#5C636C">1-9 FOCUS + SOLO · A MIXER · NO SIGNUP · FREE</text>
+  </g>
+</svg>

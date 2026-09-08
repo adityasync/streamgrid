@@ -1,0 +1,18 @@
+{
+  "name": "streamgrid",
+  "version": "1.0.0",
+  "private": true,
+  "description": "StreamGrid — watch Twitch, YouTube, Kick and more streams together in one grid.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "hls.js": "^1.5.18",
+    "next": "^15.3.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
+}
