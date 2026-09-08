@@ -1,8 +1,18 @@
+import { JetBrains_Mono } from "next/font/google";
+
 const SITE_URL = "https://streamgrid.adityalabs.in";
 const SITE_NAME = "StreamGrid";
 const TITLE = "StreamGrid — Watch Twitch, YouTube, Kick & More Together";
 const DESCRIPTION =
   "StreamGrid is a free multiview player: paste Twitch, YouTube, Kick, Rumble, Vimeo, Facebook, TikTok, Trovo, DLive, SOOP, Nimo, Odysee, HLS or MP4 links and watch up to 9 streams together in one grid. Number-key focus, auto solo audio, per-stream audio mixer. No signup.";
+
+// Self-hosted mono font: no render-blocking Google Fonts request,
+// display=swap so text never blocks on the font.
+const mono = JetBrains_Mono({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-mono",
+});
 
 export const metadata = {
   metadataBase: new URL(SITE_URL),
@@ -42,7 +52,7 @@ export const metadata = {
     description: DESCRIPTION,
     images: [
       {
-        url: "/og.svg",
+        url: "/og.png",
         width: 1200,
         height: 630,
         alt: "StreamGrid — watch up to 9 streams together",
@@ -53,7 +63,7 @@ export const metadata = {
     card: "summary_large_image",
     title: TITLE,
     description: DESCRIPTION,
-    images: ["/og.svg"],
+    images: ["/og.png"],
   },
   robots: {
     index: true,
@@ -79,7 +89,7 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
+    <html lang="en" className={mono.variable}>
       <body>{children}</body>
     </html>
   );

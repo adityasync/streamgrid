@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { buildEmbedSrc, parseStreamUrl } from "../lib/parseStream";
+import { buildShareHash, parseLocationHash } from "../lib/share";
 
 const MAX = 9;
 const LS_KEY = "streamgrid.v1";
@@ -76,29 +77,79 @@ export default function StreamGrid() {
     setLog({ text, isErr });
   }, []);
 
-  /* ── mount: parents, saved feeds, external scripts ────────── */
+  /* ── mount: shared link / preset / saved feeds / external scripts ─ */
   useEffect(() => {
     const host = window.location.hostname;
     if (host) setParents([host, "localhost", "127.0.0.1"]);
 
-    try {
-      const raw = localStorage.getItem(LS_KEY) || localStorage.getItem(LS_KEY_LEGACY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        if (Array.isArray(saved) && saved.length) {
-          setStreams(
-            saved.slice(0, MAX).map((s) => ({
-              ...s,
-              uid: typeof s.uid === "string" ? s.uid : makeUid(),
-              muted: true, // autoplay policy: always restore muted
-              volume: typeof s.volume === "number" ? s.volume : 70,
-            }))
+    // Shared grid links (#s=...) and presets (#demo=...) win over storage.
+    // The hash is consumed immediately so a later reload falls back to the
+    // (already saved) local grid instead of a stale link.
+    let sharedLoaded = false;
+    const shared = parseLocationHash(window.location.hash);
+    if (shared) {
+      try {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      } catch {
+        /* non-fatal */
+      }
+      if (shared.preset === "animals") {
+        sharedLoaded = true;
+        setTimeout(() => loadDemo(), 0);
+      } else if (shared.urls) {
+        let added = 0;
+        let skipped = 0;
+        const seen = new Set();
+        for (const u of shared.urls.slice(0, MAX)) {
+          const { stream, error } = parseStreamUrl(u);
+          const key = stream
+            ? stream.platform + JSON.stringify(stream.data)
+            : "bad:" + u;
+          if (!stream || error || seen.has(key)) {
+            skipped += 1;
+            continue;
+          }
+          seen.add(key);
+          streamsRef.current = [
+            ...streamsRef.current,
+            { ...stream, uid: makeUid(), muted: true, volume: 70 },
+          ];
+          added += 1;
+        }
+        if (added) {
+          sharedLoaded = true;
+          setStreams([...streamsRef.current]);
+          say(
+            `SHARED GRID LOADED: ${added} FEED(S)` +
+              (skipped ? `, ${skipped} SKIPPED` : "") +
+              ". NO ACCOUNT, NO DATABASE."
           );
-          say(`RESTORED ${Math.min(saved.length, MAX)} SAVED FEED(S) — ALL MUTED. PRESS 1–9 TO FOCUS + SOLO.`);
+        } else {
+          say("SHARED LINK HAD NO VALID FEEDS.", true);
         }
       }
-    } catch {
-      /* ignore corrupt storage */
+    }
+
+    if (!sharedLoaded) {
+      try {
+        const raw = localStorage.getItem(LS_KEY) || localStorage.getItem(LS_KEY_LEGACY);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          if (Array.isArray(saved) && saved.length) {
+            setStreams(
+              saved.slice(0, MAX).map((s) => ({
+                ...s,
+                uid: typeof s.uid === "string" ? s.uid : makeUid(),
+                muted: true, // autoplay policy: always restore muted
+                volume: typeof s.volume === "number" ? s.volume : 70,
+              }))
+            );
+            say(`RESTORED ${Math.min(saved.length, MAX)} SAVED FEED(S) — ALL MUTED. PRESS 1–9 TO FOCUS + SOLO.`);
+          }
+        }
+      } catch {
+        /* ignore corrupt storage */
+      }
     }
 
     // hls.js (lazy, client-only)
@@ -484,6 +535,47 @@ export default function StreamGrid() {
     );
   }, [say]);
 
+  /* shareable link: the whole grid encoded in the URL hash — no db */
+  const shareGrid = useCallback(() => {
+    const list = streamsRef.current;
+    if (!list.length) {
+      say("NOTHING TO SHARE — ADD A FEED FIRST.", true);
+      return;
+    }
+    const url =
+      window.location.origin +
+      window.location.pathname +
+      buildShareHash(list.map((s) => s.watchUrl));
+    try {
+      window.location.hash = url.slice(url.indexOf("#"));
+    } catch {
+      /* non-fatal */
+    }
+    const done = (ok) => {
+      if (ok) {
+        pushToast("LINK COPIED", `${list.length} FEED(S) ENCODED IN URL — SEND IT.`, true);
+        say(`SHARE LINK READY: ${list.length} FEED(S) IN URL. NO ACCOUNT, NO DATABASE.`);
+      } else {
+        pushToast("AUTO-COPY BLOCKED", "Copy the URL from the address bar manually.");
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(() => done(true), () => done(false));
+    } else {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        done(ok);
+      } catch {
+        done(false);
+      }
+    }
+  }, [pushToast, say]);
+
   /* ── keyboard ─────────────────────────────────────────────── */
   useEffect(() => {
     function onKey(e) {
@@ -652,6 +744,9 @@ export default function StreamGrid() {
           <button className="btn" onClick={() => toGrid(true)} title="Grid view (0)">
             [0] GRID
           </button>
+          <button className="btn" onClick={shareGrid} title="Copy shareable link for this grid (no account, no database)">
+            SHARE
+          </button>
           <button className="btn" onClick={() => setHelpOpen(true)} title="Manual (?)">
             ?
           </button>
@@ -661,28 +756,6 @@ export default function StreamGrid() {
         </div>
       </header>
 
-      {/* ══ STRIP ══ */}
-      <div id="strip">
-        <div className="strip-group">
-          <span className="strip-label">SIGNAL SOURCES:</span>
-          {["TWITCH", "YOUTUBE", "KICK", "RUMBLE", "VIMEO", "DAILYMOTION", "FACEBOOK", "TIKTOK-VOD", "TROVO", "DLIVE", "SOOP", "NIMO", "ODYSEE", "STEAM", "HLS", "MP4"].map(
-            (p) => (
-              <span key={p} className={`plat${["TWITCH", "YOUTUBE", "HLS", "MP4"].includes(p) ? " full" : ""}`}>
-                {p}
-              </span>
-            )
-          )}
-        </div>
-        <div className="strip-group keys">
-          <span className="strip-label">KEYS:</span>
-          <span className="key"><b>0</b>GRID</span>
-          <span className="key"><b>1–9</b>FOCUS+SOLO</span>
-          <span className="key"><b>A</b>MIXER</span>
-          <span className="key"><b>M</b>MUTE-ALL</span>
-          <span className="key"><b>ESC</b>EXIT</span>
-        </div>
-      </div>
-
       {/* ══ LOG ══ */}
       <div className="logline">
         <span className={`log-tag${log.isErr ? " err" : ""}`}>{log.isErr ? "ERR" : "SYS"}</span>
@@ -690,7 +763,10 @@ export default function StreamGrid() {
       </div>
 
       {/* ══ GRID — tiles stay mounted, focus is CSS-only (no reload) ══ */}
-      <main id="gridWrap" className={n ? "has-feeds" : ""}>
+      {/* when empty, the grid div is skipped entirely so the blank canvas
+          takes the full area instead of splitting it with a dead grid */}
+      <main id="gridWrap">
+        {n ? (
         <div id="grid" className={`${colsClass}${focusUid ? " focusing" : ""}`}>
           {streams.map((s, i) => {
             const focused = s.uid === focusUid;
@@ -749,29 +825,16 @@ export default function StreamGrid() {
             );
           })}
         </div>
-
-        {!n && (
+        ) : (
           <div className="empty">
+            <img src="/mark.svg" className="empty-mark" alt="" aria-hidden="true" />
             <div className="empty-inner">
               <div className="empty-code">NO SIGNAL — 00 FEEDS</div>
-              <h2 style={{ fontSize: "clamp(22px, 4vw, 40px)", margin: "10px 0" }}>
-                STREAMGRID EMPTY
-              </h2>
-              <p className="empty-desc">
-                PASTE UP TO <b>9</b> LIVE / VOD LINKS. UNSUPPORTED LINKS ARE REJECTED — NOTHING BLANK GETS
-                ADDED.
-              </p>
-              <div className="empty-steps">
-                <div className="step"><span>01</span>PASTE URL → <b>ENTER</b> / ADD</div>
-                <div className="step"><span>02</span>PRESS <b>1–9</b> TO FOCUS (AUTO-SOLOS AUDIO, NO RELOAD)</div>
-                <div className="step"><span>03</span>PRESS <b>A</b> FOR PER-FEED AUDIO MIXER</div>
+              <div className="empty-title">PASTE A STREAM URL</div>
+              <div className="empty-sub">
+                <b>ENTER</b> TO ADD · UP TO 9 · OR HIT <b>DEMO</b>
               </div>
-              <div className="empty-samples">
-                <div className="sample-label">FIELD EXAMPLES — 24/7 ANIMAL STREAMS (OR HIT DEMO):</div>
-                <code>https://www.youtube.com/watch?v=T4XZmMPQ9Kw</code>
-                <code>https://www.twitch.tv/alveussanctuary</code>
-                <code>https://kick.com/untamedlivefrombackyard</code>
-              </div>
+              <div className="empty-keys">1–9 FOCUS · A MIXER · ? MANUAL</div>
             </div>
           </div>
         )}
@@ -886,6 +949,11 @@ export default function StreamGrid() {
                 TWITCH.TV AND NO SITE CAN DISABLE THEM. <b>UBLOCK ORIGIN</b> IN YOUR OWN BROWSER
                 REMOVES THEM INSIDE THIS GRID, OR SUB / TURBO + LOG IN.
               </p>
+              <p className="modal-note">
+                <b>SHARE</b> — COPIES A LINK WITH YOUR WHOLE GRID ENCODED IN THE URL (#s=…). ANYONE
+                OPENING IT GETS YOUR FEEDS. NO ACCOUNT, NO DATABASE — THE HASH NEVER REACHES A SERVER.
+                TRY <b>#demo=animals</b> FOR THE BUILT-IN ANIMAL GRID.
+              </p>
             </div>
           </div>
         </div>
@@ -899,7 +967,9 @@ export default function StreamGrid() {
         <span className="sep">|</span>
         <span>{audioSummary}</span>
         <span className="flex" />
-        <span className="dim hide-m">TILES PERSIST IN DOM — FOCUS = CSS ONLY, NO RELOAD</span>
+        <span className="dim hide-m">0 GRID · 1–9 FOCUS · A MIXER · M MUTE · ESC EXIT</span>
+        <span className="sep">|</span>
+        <a href="/guide" title="Multiview guide: platforms, shortcuts, sharing, troubleshooting">GUIDE</a>
       </footer>
 
       <div id="toasts">
