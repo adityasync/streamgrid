@@ -1,4 +1,5 @@
 import { JetBrains_Mono } from "next/font/google";
+import "./globals.css";
 
 const SITE_URL = "https://streamgrid.adityalabs.in";
 const SITE_NAME = "StreamGrid";

@@ -1,4 +1,3 @@
-import "./globals.css";
 import StreamGrid from "../components/StreamGrid";
 
 function AppJsonLd() {
