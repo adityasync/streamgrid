@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CircleQuestionMark, LayoutGrid, Maximize, Share2, SlidersHorizontal, Trash, VolumeX } from "lucide-react";
 import Logo from "./Logo";
 import { buildEmbedSrc, parseStreamUrl } from "../lib/parseStream";
 import { buildShareHash, parseLocationHash } from "../lib/share";
@@ -1389,17 +1390,17 @@ export default function StreamGrid() {
         </div>
 
         <div className="top-actions">
-          <button className={`btn${theater ? " btn-primary" : ""}`} onClick={toggleTheater} title="Chromeless canvas — hide header/log/statusbar (F)">
-            [F] THEATER
+          <button className={`btn btn-icon${theater ? " btn-primary" : ""}`} onClick={toggleTheater} title="Theater — chromeless canvas (F)">
+            <Maximize size={15} strokeWidth={2.25} /><span className="tkey">F</span>
           </button>
-          <button className="btn" onClick={() => setMixerOpen((v) => !v)} title="Audio mixer (A)">
-            [A] MIXER <span id="mixerDot" className={`dot${mixerOpen ? "" : " hidden"}`} />
+          <button className="btn btn-icon" onClick={() => setMixerOpen((v) => !v)} title="Audio mixer (A)">
+            <SlidersHorizontal size={15} strokeWidth={2.25} /><span className="tkey">A</span> <span id="mixerDot" className={`dot${mixerOpen ? "" : " hidden"}`} />
           </button>
-          <button className="btn" onClick={muteAll} title="Mute all (M)">
-            [M] MUTE-ALL
+          <button className="btn btn-icon" onClick={muteAll} title="Mute all (M)">
+            <VolumeX size={15} strokeWidth={2.25} /><span className="tkey">M</span>
           </button>
-          <button className="btn" onClick={() => toGrid(true)} title="Grid view (0)">
-            [0] GRID
+          <button className="btn btn-icon" onClick={() => toGrid(true)} title="Grid view (0)">
+            <LayoutGrid size={15} strokeWidth={2.25} /><span className="tkey">0</span>
           </button>
           <button
             className={`btn${colsMode !== "auto" ? " btn-primary" : ""}`}
@@ -1436,14 +1437,14 @@ export default function StreamGrid() {
           >
             FILL
           </button>
-          <button className="btn" onClick={shareGrid} title="Copy shareable link for this grid (no account, no database)">
-            SHARE
+          <button className="btn btn-icon" onClick={shareGrid} title="Copy shareable link for this grid (no account, no database)">
+            <Share2 size={15} strokeWidth={2.25} />
           </button>
-          <button className="btn" onClick={() => setHelpOpen(true)} title="Manual (?)">
-            ?
+          <button className="btn btn-icon" onClick={() => setHelpOpen(true)} title="Manual (?)">
+            <CircleQuestionMark size={15} strokeWidth={2.25} />
           </button>
-          <button className="btn btn-danger" onClick={clearAll} title="Remove all streams">
-            CLR
+          <button className="btn btn-icon btn-danger" onClick={clearAll} title="Remove all streams">
+            <Trash size={15} strokeWidth={2.25} />
           </button>
         </div>
       </header>
