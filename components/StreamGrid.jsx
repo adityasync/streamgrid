@@ -52,6 +52,7 @@ export default function StreamGrid() {
   const [chromeHidden, setChromeHidden] = useState(false);
   const [colsMode, setColsMode] = useState("auto");
   const [lock16, setLock16] = useState(false);
+  const [fill, setFill] = useState(false);
   const [input, setInput] = useState("");
   const [log, setLog] = useState({
     text: "READY. PASTE A STREAM URL ABOVE. ALL STREAMS START MUTED (BROWSER AUTOPLAY POLICY) — FOCUS A TILE OR USE THE MIXER TO UNMUTE.",
@@ -197,6 +198,7 @@ export default function StreamGrid() {
         if (layout) {
           if (COLS_ORDER.includes(layout.cols)) setColsMode(layout.cols);
           if (layout.ar === 1) setLock16(true);
+          if (layout.fill === 1) setFill(true);
         }
       } catch {
         /* ignore corrupt layout */
@@ -270,11 +272,11 @@ export default function StreamGrid() {
   useEffect(() => {
     if (!loaded.current) return;
     try {
-      localStorage.setItem(LS_LAYOUT, JSON.stringify({ cols: colsMode, ar: lock16 ? 1 : 0 }));
+      localStorage.setItem(LS_LAYOUT, JSON.stringify({ cols: colsMode, ar: lock16 ? 1 : 0, fill: fill ? 1 : 0 }));
     } catch {
       /* non-fatal */
     }
-  }, [colsMode, lock16]);
+  }, [colsMode, lock16, fill]);
 
   /* ── player constructors ──────────────────────────────────── */
   function currentOf(uid) {
@@ -837,6 +839,53 @@ export default function StreamGrid() {
     [say]
   );
 
+  /* pointer-based drag reorder (mouse + touch): press the ⠿ handle and
+   * drop onto any tile. Deliberately NOT HTML5 DnD — that API misfires
+   * around cross-origin iframes and is dead on touchscreens. */
+  const dragOn = useRef(false);
+
+  function tileFromPoint(x, y) {
+    try {
+      const sec = document.elementFromPoint(x, y)?.closest?.("section.tile");
+      return sec?.dataset?.uid || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function onHandleDown(e, uid) {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    dragUidRef.current = uid;
+    dragOn.current = true;
+    setDropUid(null);
+    setDragUid(uid);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+  }
+
+  function onHandleMove(e) {
+    if (!dragOn.current || !dragUidRef.current) return;
+    const over = tileFromPoint(e.clientX, e.clientY);
+    setDropUid(over && over !== dragUidRef.current ? over : null);
+  }
+
+  function endHandleDrag(e, commit) {
+    if (!dragOn.current) return;
+    dragOn.current = false;
+    const from = dragUidRef.current;
+    setDragUid(null);
+    setDropUid(null);
+    // NOTE: the ref must stay set until AFTER dropReorder runs —
+    // dropReorder reads the dragged uid from dragUidRef.
+    if (commit && from && e && typeof e.clientX === "number") {
+      const target = tileFromPoint(e.clientX, e.clientY);
+      if (target && target !== from) dropReorder(target);
+    }
+    dragUidRef.current = null;
+  }
+
   /* layout override: cycle AUTO → 1 → 2 → 3 → AUTO. CSS-only, players untouched. */
   const cycleCols = useCallback(() => {
     setColsMode((prev) => {
@@ -1164,6 +1213,92 @@ export default function StreamGrid() {
     };
   }, [theater]);
 
+  /* FILL (cover-crop): scale each embed so its 16:9 picture covers the
+   * tile — zero bars, at the cost of cropped edges. <video> does it via
+   * CSS object-fit; iframe/slot embeds get exact object-fit:cover math
+   * through a ResizeObserver with direct style writes (no re-renders).
+   * Players are never rebuilt, so toggling never reloads a stream. */
+  useEffect(() => {
+    const bodies = [...bodyEls.current.values()];
+    const kidOf = (b) => {
+      try {
+        return b.querySelector("iframe, video, .tw-slot, .yt-slot");
+      } catch {
+        return null;
+      }
+    };
+    const reset = () => {
+      for (const b of bodies) {
+        const k = kidOf(b);
+        if (k) {
+          k.style.width = "";
+          k.style.height = "";
+          k.style.left = "";
+          k.style.top = "";
+        }
+      }
+    };
+    if (!fill) {
+      reset();
+      return;
+    }
+    const VID = 16 / 9;
+    const apply = (body) => {
+      let r;
+      try {
+        r = body.getBoundingClientRect();
+      } catch {
+        return;
+      }
+      if (!r.width || !r.height) return;
+      const k = kidOf(body);
+      if (!k || k.tagName === "VIDEO") return;
+      const ar = r.width / r.height;
+      if (Math.abs(ar - VID) < 0.02) {
+        k.style.width = "100%";
+        k.style.height = "100%";
+        k.style.left = "0";
+        k.style.top = "0";
+        return;
+      }
+      if (ar > VID) {
+        // tile wider than video: stretch width, crop sides
+        const s = ar / VID;
+        k.style.width = `${s * 100}%`;
+        k.style.height = "100%";
+        k.style.left = `${(1 - s) * 50}%`;
+        k.style.top = "0";
+      } else {
+        // tile taller than video: stretch height, crop top/bottom
+        const s = VID / ar;
+        k.style.width = "100%";
+        k.style.height = `${s * 100}%`;
+        k.style.left = "0";
+        k.style.top = `${(1 - s) * 50}%`;
+      }
+    };
+    let ro = null;
+    try {
+      ro = new ResizeObserver((entries) => {
+        for (const en of entries) apply(en.target);
+      });
+    } catch {
+      ro = null;
+    }
+    for (const b of bodies) {
+      apply(b);
+      try {
+        ro?.observe(b);
+      } catch {}
+    }
+    return () => {
+      try {
+        ro?.disconnect();
+      } catch {}
+      reset();
+    };
+  }, [fill, streams]);
+
   function renderBody(s) {
     if (isVideo(s)) {
       return (
@@ -1204,7 +1339,7 @@ export default function StreamGrid() {
   }
 
   return (
-    <div id="app" className={`${theater ? "theater" : ""}${theater && chromeHidden ? " idle-hide" : ""}${lock16 ? " lock16" : ""}`}>
+    <div id="app" className={`${theater ? "theater" : ""}${theater && chromeHidden ? " idle-hide" : ""}${lock16 ? " lock16" : ""}${fill ? " fill" : ""}`}>
       <h1
         style={{
           position: "absolute",
@@ -1277,13 +1412,29 @@ export default function StreamGrid() {
             className={`btn${lock16 ? " btn-primary" : ""}`}
             onClick={() => {
               setLock16((v) => {
-                say(v ? "ASPECT: STRETCH — TILES FILL THE VIEWPORT." : "ASPECT: 16:9 LOCK — TILES KEEP WIDESCREEN, LETTERBOXED. SAVED.");
-                return !v;
+                const on = !v;
+                if (on) setFill(false);
+                say(on ? "ASPECT: 16:9 LOCK — TILES KEEP WIDESCREEN, LETTERBOXED. SAVED." : "ASPECT: STRETCH — TILES FILL THE VIEWPORT.");
+                return on;
               });
             }}
             title="Lock tiles to 16:9 instead of stretching to fill (saved)"
           >
             16:9
+          </button>
+          <button
+            className={`btn${fill ? " btn-primary" : ""}`}
+            onClick={() => {
+              setFill((v) => {
+                const on = !v;
+                if (on) setLock16(false);
+                say(on ? "FILL: COVER-CROP — PICTURE COVERS EVERY TILE, EDGES CROPPED. SAVED." : "FILL OFF — FULL PICTURE, BARS MAY SHOW. SAVED.");
+                return on;
+              });
+            }}
+            title="Cover-crop every tile: no black bars anywhere, edges cropped (saved)"
+          >
+            FILL
           </button>
           <button className="btn" onClick={shareGrid} title="Copy shareable link for this grid (no account, no database)">
             SHARE
@@ -1297,12 +1448,6 @@ export default function StreamGrid() {
         </div>
       </header>
 
-      {/* ══ LOG ══ */}
-      <div className="logline">
-        <span className={`log-tag${log.isErr ? " err" : ""}`}>{log.isErr ? "ERR" : "SYS"}</span>
-        <span id="logText">{log.text}</span>
-      </div>
-
       {/* ══ GRID — tiles stay mounted, focus is CSS-only (no reload) ══ */}
       {/* when empty, the grid div is skipped entirely so the blank canvas
           takes the full area instead of splitting it with a dead grid */}
@@ -1315,20 +1460,7 @@ export default function StreamGrid() {
             return (
               <section
                 key={s.uid}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDropUid((prev) => (prev === s.uid ? prev : s.uid));
-                }}
-                onDragLeave={() => {
-                  setDropUid((prev) => (prev === s.uid ? null : prev));
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  dropReorder(s.uid);
-                  setDropUid(null);
-                  setDragUid(null);
-                  dragUidRef.current = null;
-                }}
+                data-uid={s.uid}
                 className={`tile${focused ? " focused" : ""}${hidden ? " hidden-tile" : ""}${s.muted ? "" : " audible"}${dragUid === s.uid ? " dragging" : ""}${dropUid === s.uid && dragUid !== s.uid ? " drop-target" : ""}`}
                 style={{ animationDelay: `${Math.min(i, 8) * 70}ms` }}
                 aria-label={`Feed ${i + 1}: ${s.label} ${s.title}`}
@@ -1336,21 +1468,11 @@ export default function StreamGrid() {
                 <div className="tile-head">
                   <span
                     className="drag-handle"
-                    draggable
-                    title="Drag to reorder (or use ‹ › below)"
-                    onDragStart={(e) => {
-                      dragUidRef.current = s.uid;
-                      setDragUid(s.uid);
-                      try {
-                        e.dataTransfer.effectAllowed = "move";
-                        e.dataTransfer.setData("text/plain", s.uid);
-                      } catch {}
-                    }}
-                    onDragEnd={() => {
-                      setDropUid(null);
-                      setDragUid(null);
-                      dragUidRef.current = null;
-                    }}
+                    title="Hold + drag to reorder"
+                    onPointerDown={(e) => onHandleDown(e, s.uid)}
+                    onPointerMove={onHandleMove}
+                    onPointerUp={(e) => endHandleDrag(e, true)}
+                    onPointerCancel={() => endHandleDrag(null, false)}
                   >
                     ⠿
                   </span>
@@ -1537,8 +1659,9 @@ export default function StreamGrid() {
               </p>
               <p className="modal-note">
                 LAYOUT — <b>COLS</b> FORCES 1/2/3 COLUMNS (AUTO PICKS BY FEED COUNT; 5–7 FEEDS OFTEN WANT
-                MANUAL 3). <b>16:9</b> LOCKS TILES TO WIDESCREEN INSTEAD OF STRETCHING. BOTH SAVED
-                LOCALLY, BOTH CSS-ONLY — NO STREAM RELOADS.
+                MANUAL 3). <b>16:9</b> LOCKS TILES TO WIDESCREEN INSTEAD OF STRETCHING. <b>FILL</b>{" "}
+                COVER-CROPS EVERY TILE SO NO BLACK BARS REMAIN — EDGES GET CUT INSTEAD. ALL SAVED
+                LOCALLY, ALL CSS-ONLY — NO STREAM RELOADS.
               </p>
               <p className="modal-note">
                 TWITCH PRE-ROLLS? THAT IS TWITCH, NOT US — THE OFFICIAL EMBED SERVES THE SAME ADS AS
@@ -1555,13 +1678,16 @@ export default function StreamGrid() {
         </div>
       )}
 
-      {/* ══ STATUS BAR ══ */}
+      {/* ══ STATUS BAR (log merged in — one row, not two) ══ */}
       <footer id="statusbar">
-        <span>FEEDS: {n}</span>
+        <span className={`log-tag${log.isErr ? " err" : ""}`}>{log.isErr ? "ERR" : "SYS"}</span>
+        <span id="logText" className="status-log">{log.text}</span>
         <span className="sep">|</span>
-        <span>{theater ? "MODE: THEATER" : focusUid ? `MODE: FOCUS ${streams.findIndex((s) => s.uid === focusUid) + 1}` : "MODE: GRID"}</span>
+        <span className="stat">FEEDS: {n}</span>
         <span className="sep">|</span>
-        <span>{audioSummary}</span>
+        <span className="stat">{theater ? "MODE: THEATER" : focusUid ? `MODE: FOCUS ${streams.findIndex((s) => s.uid === focusUid) + 1}` : "MODE: GRID"}</span>
+        <span className="sep hide-m">|</span>
+        <span className="stat hide-m">{audioSummary}</span>
         <span className="flex" />
         <span className="dim hide-m">0 GRID · 1–9 FOCUS · A MIXER · M MUTE · F THEATER · L COLS · ESC EXIT</span>
         <span className="sep">|</span>

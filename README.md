@@ -4,7 +4,7 @@ Watch up to 9 live streams together in a single grid — Twitch, YouTube, Kick, 
 
 **Live app:** https://streamgrid.adityalabs.in
 
-![StreamGrid](public/og.svg)
+![StreamGrid](public/og.png)
 
 ## Features
 

@@ -94,29 +94,27 @@ button { font-family: var(--mono); -webkit-tap-highlight-color: transparent; }
   transform: scale(1.06);
   filter: drop-shadow(0 0 10px rgba(255, 176, 0, 0.45));
 }
-.lcell { animation: cell-scan 3.8s ease-in-out infinite; }
+/* ── living logo, calm by default: one slow sweep on load, then rests.
+ * Hovering the brand replays it gently; nothing loops forever. ── */
+.lcell { animation: cell-scan 3.4s ease-in-out 1 both; }
 @keyframes cell-scan {
   0%, 100% { fill: #141619; }
-  7% { fill: #7a5a00; }
-  14% { fill: #141619; }
+  12% { fill: #544200; }
+  24% { fill: #141619; }
 }
-.lplay {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: play-breathe 2.6s ease-in-out infinite;
-}
+.brand:hover .lcell { animation-iteration-count: infinite; animation-duration: 6s; }
+.lplay { opacity: 1; }
+.brand:hover .lplay { animation: play-breathe 4s ease-in-out infinite; }
 @keyframes play-breathe {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+  50% { opacity: 0.65; }
 }
-.logo-cursor { animation: cursor-blink 2.2s ease-in-out infinite; }
 @keyframes cursor-blink {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.2; }
+  50% { opacity: 0.5; }
 }
-/* empty-state backdrop mark runs the same sweep, slower + fainter */
-.empty-mark .lcell { animation-duration: 6s; }
-.empty-mark .lplay { animation-duration: 4s; }
+/* empty-state backdrop mark: one slow sweep on load, then still */
+.empty-mark .lcell { animation-duration: 5.5s; }
 .brand-mark {
   width: 40px; height: 40px;
   background: var(--amber);
@@ -181,23 +179,12 @@ button { font-family: var(--mono); -webkit-tap-highlight-color: transparent; }
 }
 .dot.hidden { display: none; }
 
-/* ── log line ────────────────────────────────────── */
-.logline {
-  display: flex; gap: 10px; align-items: center;
-  padding: 5px 10px;
-  background: #0f1113;
-  border-bottom: 1px solid var(--line);
-  font-size: 11px;
-  flex: none;
-  white-space: nowrap;
-}
+/* ── log tag lives in the status bar now (one row, not two) ── */
 .log-tag {
   background: var(--amber); color: #111;
   font-weight: 800; font-size: 10px; padding: 1px 6px; flex: none;
 }
 .log-tag.err { background: var(--red); color: #fff; }
-#logText { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
-#logText strong { color: var(--txt); }
 
 /* ── grid: fills the viewport, tiles stretch ───────── */
 #gridWrap {
@@ -310,19 +297,41 @@ button { font-family: var(--mono); -webkit-tap-highlight-color: transparent; }
   font-size: 12px;
   padding: 2px 4px;
   user-select: none;
+  -webkit-user-select: none;
+  touch-action: none; /* let vertical finger-drags reorder instead of scrolling */
   flex: none;
 }
 .drag-handle:hover { color: var(--amber); }
 .drag-handle:active { cursor: grabbing; }
+/* tile header: floating overlay over the video, revealed on hover /
+ * keyboard-focus / focused tile. Frees ~35px of canvas per tile. */
 .tile-head {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 7;
   display: flex; align-items: center; gap: 6px;
   padding: 4px 6px;
-  background: var(--panel2);
+  background: rgba(42, 46, 52, 0.92);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--line);
   font-size: 11px;
   flex: none;
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition: opacity 0.25s var(--ease), transform 0.25s var(--ease);
 }
-.tile.focused .tile-head { background: #3a3000; }
+.tile:hover .tile-head,
+.tile:focus-within .tile-head,
+.tile.focused .tile-head {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+/* touch: no hover — header stays docked so controls exist */
+@media (hover: none) {
+  .tile-head { opacity: 1; transform: none; pointer-events: auto; }
+}
+.tile.focused .tile-head { background: rgba(58, 48, 0, 0.92); }
 .idx {
   background: #0f1113; border: 1px solid var(--line2);
   font-weight: 800; padding: 1px 7px; color: var(--amber);
@@ -351,6 +360,12 @@ button { font-family: var(--mono); -webkit-tap-highlight-color: transparent; }
 .tbtn:hover { color: var(--amber); border-color: var(--amber); }
 .tbtn.on { color: var(--amber); border-color: var(--amber); }
 .tbtn.danger:hover { color: var(--red); border-color: var(--red); }
+/* 5 header buttons must never push each other out on narrow tiles:
+ * only the stream title squeezes */
+.tile-head { overflow: hidden; }
+.tile-head .idx, .tile-head .tplat, .tile-head .tsig,
+.tile-head .tile-btns, .tile-head .drag-handle { flex: none; }
+.tile-head .tname { min-width: 0; }
 
 .tile-body {
   position: relative;
@@ -533,11 +548,21 @@ input[type="range"]:disabled { accent-color: var(--faint); cursor: not-allowed; 
   padding: 6px 10px;
   font-size: 11px;
   letter-spacing: 0.06em;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   white-space: nowrap;
+  overflow: hidden;
 }
-#statusbar .sep { color: var(--faint); }
+#statusbar .sep { color: var(--faint); flex: none; }
 #statusbar .flex { flex: 1; }
+#statusbar .stat { flex: none; }
+/* merged log: takes leftover width, truncates with ellipsis */
+#logText.status-log {
+  color: var(--dim);
+  flex: 1 1 auto;
+  min-width: 40px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ── toasts ──────────────────────────────────────── */
 #toasts {
@@ -560,12 +585,14 @@ input[type="range"]:disabled { accent-color: var(--faint); cursor: not-allowed; 
 .toast b { display: block; margin-bottom: 2px; }
 .toast span { color: var(--dim); }
 
+/* ── FILL: cover-crop — video does it natively, embeds via JS math ── */
+#app.fill .tile-body video { object-fit: cover; }
+
 /* ── theater: chromeless canvas — just the streams ── */
 #app.theater {
   background: #000;
 }
 #app.theater #topbar,
-#app.theater .logline,
 #app.theater #statusbar {
   display: none;
 }
@@ -585,8 +612,7 @@ input[type="range"]:disabled { accent-color: var(--faint); cursor: not-allowed; 
   border: 0;
   box-shadow: none;
 }
-#app.theater .tile-head,
-#app.theater .tile-foot {
+#app.theater .tile-head {
   display: none;
 }
 #app.theater .empty {

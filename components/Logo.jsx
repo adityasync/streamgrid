@@ -55,7 +55,7 @@ export default function Logo({ variant = "lockup", className = "", decorative = 
       </g>
       <g fontFamily="'JetBrains Mono','IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace">
         <text x="76" y="33" fontSize="24" fontWeight="800" letterSpacing="1.5" fill="#D6D9DD">
-          STREAMGRID<tspan fill="#FFB000" className="logo-cursor">//</tspan>
+          STREAMGRID<tspan fill="#FFB000">//</tspan>
         </text>
         <text x="77" y="54" fontSize="12.5" fontWeight="400" letterSpacing="3.2" fill="#8A919A">
           MULTI-SOURCE VIEW GRID
