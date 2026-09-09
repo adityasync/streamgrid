@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Logo from "./Logo";
 import { buildEmbedSrc, parseStreamUrl } from "../lib/parseStream";
 import { buildShareHash, parseLocationHash } from "../lib/share";
 
@@ -59,6 +60,8 @@ export default function StreamGrid() {
   const [toasts, setToasts] = useState([]);
   const [parents, setParents] = useState(["localhost", "127.0.0.1"]);
   const [twBlocked, setTwBlocked] = useState({}); // uid -> true while a Twitch tile needs a tap to play
+  const [ready, setReady] = useState(() => new Set()); // uids whose first frame loaded (tune-in done)
+  const [flash, setFlash] = useState(null); // {uid, k} — one-shot unmute ring, cleared after 700ms
   const [dragUid, setDragUid] = useState(null);
   const [dropUid, setDropUid] = useState(null);
 
@@ -67,6 +70,7 @@ export default function StreamGrid() {
   const mixerRef = useRef(false);
   const theaterRef = useRef(false);
   const dragUidRef = useRef(null);
+  const flashTimer = useRef(null);
   const idleTimer = useRef(null);
   const ytPlayers = useRef(new Map());
   const twPlayers = useRef(new Map());
@@ -94,6 +98,25 @@ export default function StreamGrid() {
 
   const say = useCallback((text, isErr = false) => {
     setLog({ text, isErr });
+  }, []);
+
+  /* first-frame loaded → fade the TUNING overlay for that tile only */
+  const markReady = useCallback((uid) => {
+    setReady((prev) => {
+      if (prev.has(uid)) return prev;
+      const next = new Set(prev);
+      next.add(uid);
+      return next;
+    });
+  }, []);
+
+  const unready = useCallback((uid) => {
+    setReady((prev) => {
+      if (!prev.has(uid)) return prev;
+      const next = new Set(prev);
+      next.delete(uid);
+      return next;
+    });
   }, []);
 
   /* ── mount: shared link / preset / saved feeds / external scripts ─ */
@@ -280,6 +303,7 @@ export default function StreamGrid() {
         },
         events: {
           onReady: (e) => {
+            markReady(s.uid);
             const cur = currentOf(s.uid);
             try {
               if (cur?.muted) e.target.mute();
@@ -392,6 +416,7 @@ export default function StreamGrid() {
       try {
         p.addEventListener(EV.ready, () => {
           fixTwIframe(s.uid);
+          markReady(s.uid);
           try {
             p.setVolume((currentOf(s.uid)?.volume ?? 70) / 100);
           } catch {}
@@ -558,6 +583,10 @@ export default function StreamGrid() {
       }
       return changed ? next : prev;
     });
+    setReady((prev) => {
+      if ([...prev].every((uid) => alive.has(uid))) return prev;
+      return new Set([...prev].filter((uid) => alive.has(uid)));
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streams, parents]);
 
@@ -666,6 +695,14 @@ export default function StreamGrid() {
     const s = currentOf(uid);
     setStreams((prev) => prev.map((x) => (x.uid === uid ? { ...x, muted } : x)));
     if (s) playerMute({ ...s, muted }, muted);
+    if (!muted) {
+      // one-shot amber ring confirms the unmute landed (CSS animates it out)
+      try {
+        if (flashTimer.current) clearTimeout(flashTimer.current);
+      } catch {}
+      setFlash({ uid, k: Date.now() });
+      flashTimer.current = setTimeout(() => setFlash(null), 700);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -682,6 +719,7 @@ export default function StreamGrid() {
     (uid) => {
       const s = currentOf(uid);
       if (!s) return;
+      unready(uid); // replay the TUNING overlay for this tile
       const idx = streamsRef.current.findIndex((x) => x.uid === uid);
       const tag = `FEED ${String(idx + 1).padStart(2, "0")}`;
       if (isYouTube(s)) {
@@ -757,7 +795,7 @@ export default function StreamGrid() {
       setStreams((prev) => prev.map((x) => (x.uid === uid ? { ...x, nonce: (x.nonce || 0) + 1 } : x)));
       say(`${tag} RELOADED — OTHERS UNTOUCHED.`);
     },
-    [say]
+    [say, unready]
   );
 
   /* reorder: keys 1–9 follow the new order; focus (by uid) is preserved;
@@ -893,6 +931,8 @@ export default function StreamGrid() {
     if (!window.confirm("REMOVE ALL FEEDS?")) return;
     setStreams([]);
     setFocusUid(null);
+    setReady(new Set());
+    setFlash(null);
     preFocus.current = new Map();
     say("GRID CLEARED. PASTE A URL TO START AGAIN.");
   }, [say]);
@@ -1137,6 +1177,7 @@ export default function StreamGrid() {
           autoPlay
           muted
           preload="auto"
+          onLoadedData={() => markReady(s.uid)}
           title={`${s.label} — ${s.title}`}
         />
       );
@@ -1156,6 +1197,7 @@ export default function StreamGrid() {
         key={s.nonce || 0}
         src={buildEmbedSrc(s, s.muted, parents)}
         title={`${s.label} — ${s.title}`}
+        onLoad={() => markReady(s.uid)}
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
       />
     );
@@ -1179,7 +1221,7 @@ export default function StreamGrid() {
       {/* ══ TOP COMMAND BAR ══ */}
       <header id="topbar">
         <div className="brand">
-          <img src="/logo.svg" alt="StreamGrid" height="40" width="212" />
+          <Logo variant="lockup" />
           <div className="brand-text" style={{ display: "none" }}>
             <div className="brand-title">
               STREAMGRID<span className="dim">//UNIT-01</span>
@@ -1287,7 +1329,7 @@ export default function StreamGrid() {
                   setDragUid(null);
                   dragUidRef.current = null;
                 }}
-                className={`tile${focused ? " focused" : ""}${hidden ? " hidden-tile" : ""}${dragUid === s.uid ? " dragging" : ""}${dropUid === s.uid && dragUid !== s.uid ? " drop-target" : ""}`}
+                className={`tile${focused ? " focused" : ""}${hidden ? " hidden-tile" : ""}${s.muted ? "" : " audible"}${dragUid === s.uid ? " dragging" : ""}${dropUid === s.uid && dragUid !== s.uid ? " drop-target" : ""}`}
                 style={{ animationDelay: `${Math.min(i, 8) * 70}ms` }}
                 aria-label={`Feed ${i + 1}: ${s.label} ${s.title}`}
               >
@@ -1350,6 +1392,13 @@ export default function StreamGrid() {
                   }}
                 >
                   {renderBody(s)}
+                  {/* tune-in: scanlines until the first frame lands, then fades.
+                      stays mounted (opacity 0) so the fade is smooth, no reflow */}
+                  <div className={`tune${ready.has(s.uid) ? " ready" : ""}`} aria-hidden="true">
+                    <span className="tune-msg">
+                      TUNING<span className="blink">_</span>
+                    </span>
+                  </div>
                   {twBlocked[s.uid] && isTwitchApi(s) && (
                     <div className="tw-veil">
                       <button
@@ -1362,28 +1411,13 @@ export default function StreamGrid() {
                     </div>
                   )}
                 </div>
-                <div className="tile-foot">
-                  <span className={s.muted ? "aud-muted" : "aud-unmuted"}>
-                    {s.muted ? "MUTED" : `VOL ${s.volume}`}
-                  </span>
-                  <span>{isFullAudio(s) ? "API: FULL" : "API: MUTE-ONLY*"}</span>
-                  <span className="push">
-                    <button className="fbtn" onClick={() => moveTile(s.uid, -1)} disabled={i === 0} title={i === 0 ? "First position" : "Move left (← on focused)"} aria-label={`Move feed ${i + 1} left`}>
-                      ‹
-                    </button>
-                    <span> KEY [{i + 1}] · {s.platform.toUpperCase()} </span>
-                    <button className="fbtn" onClick={() => moveTile(s.uid, 1)} disabled={i === n - 1} title={i === n - 1 ? "Last position" : "Move right (→ on focused)"} aria-label={`Move feed ${i + 1} right`}>
-                      ›
-                    </button>
-                  </span>
-                </div>
               </section>
             );
           })}
         </div>
         ) : (
           <div className="empty">
-            <img src="/mark.svg" className="empty-mark" alt="" aria-hidden="true" />
+            <Logo variant="mark" className="empty-mark" decorative />
             <div className="empty-inner">
               <div className="empty-code">NO SIGNAL — 00 FEEDS</div>
               <div className="empty-title">PASTE A STREAM URL</div>
