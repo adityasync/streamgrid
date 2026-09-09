@@ -1,4 +1,5 @@
 import { JetBrains_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 
 const SITE_URL = "https://streamgrid.adityalabs.in";
@@ -91,6 +92,21 @@ export const viewport = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className={mono.variable}>
+      <head>
+        {/* Google tag (gtag.js) */}
+        <Script
+          src="https://www.googletagmanager.com/gtag/js?id=G-WNYHCD1XPQ"
+          strategy="afterInteractive"
+        />
+        <Script id="google-analytics" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', 'G-WNYHCD1XPQ');
+          `}
+        </Script>
+      </head>
       <body>{children}</body>
     </html>
   );

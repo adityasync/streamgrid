@@ -16,6 +16,7 @@
   --red: #ff453a;
   --grn: #9bc53d;
   --mono: var(--font-mono), "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 * { box-sizing: border-box; }
@@ -52,7 +53,14 @@ body {
 
 ::selection { background: var(--amber); color: #111; }
 .dim { color: var(--dim); }
-button { font-family: var(--mono); }
+.hidden { display: none; }
+button { font-family: var(--mono); -webkit-tap-highlight-color: transparent; }
+
+/* visible keyboard focus */
+:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: 2px;
+}
 
 /* ── top command bar ─────────────────────────────── */
 #topbar {
@@ -114,6 +122,7 @@ button { font-family: var(--mono); }
   cursor: pointer;
   text-transform: uppercase;
   white-space: nowrap;
+  transition: color 0.18s var(--ease), border-color 0.18s var(--ease), background-color 0.18s var(--ease), transform 0.1s var(--ease);
 }
 .btn:hover { border-color: var(--amber); color: var(--amber); }
 .btn:active { transform: translateY(1px); }
@@ -170,6 +179,10 @@ button { font-family: var(--mono); }
 #grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
 #grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
 @media (min-width: 1400px) { #grid.cols-4 { grid-template-columns: repeat(3, 1fr); } }
+/* manual column override (L key / COLS button) — CSS-only, no reload */
+#grid.cols-man-1 { grid-template-columns: 1fr; }
+#grid.cols-man-2 { grid-template-columns: repeat(2, 1fr); }
+#grid.cols-man-3 { grid-template-columns: repeat(3, 1fr); }
 #grid.focusing { grid-template-columns: 1fr; }
 #grid.focusing .tile.hidden-tile { display: none; }
 
@@ -181,8 +194,27 @@ button { font-family: var(--mono); }
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  transition: border-color 0.25s var(--ease), box-shadow 0.35s var(--ease);
+  animation: tile-in 0.5s var(--ease) both;
 }
-.tile.focused { border: 2px solid var(--amber); }
+@keyframes tile-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.99); filter: blur(6px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+.tile.focused { border: 2px solid var(--amber); box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55), 0 0 24px rgba(255, 176, 0, 0.08); }
+/* drag-to-reorder states (desktop): dragged tile ghosts, drop target glows */
+.tile.dragging { opacity: 0.4; }
+.tile.drop-target { outline: 2px dashed var(--amber); outline-offset: -2px; }
+.drag-handle {
+  cursor: grab;
+  color: var(--faint);
+  font-size: 12px;
+  padding: 2px 4px;
+  user-select: none;
+  flex: none;
+}
+.drag-handle:hover { color: var(--amber); }
+.drag-handle:active { cursor: grabbing; }
 .tile-head {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 6px;
@@ -203,7 +235,11 @@ button { font-family: var(--mono); }
   white-space: nowrap; flex: 1; min-width: 60px; font-size: 11px;
 }
 .tsig { font-size: 10px; color: var(--faint); letter-spacing: 0.08em; }
-.tsig.live { color: var(--red); }
+.tsig.live { color: var(--red); animation: pulse 1.8s ease-in-out infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 .tile-btns { display: flex; gap: 4px; margin-left: auto; }
 .tbtn {
   background: #0f1113; color: var(--dim);
@@ -211,6 +247,7 @@ button { font-family: var(--mono); }
   font-size: 10px; font-weight: 700;
   min-width: 30px; height: 26px;
   cursor: pointer; padding: 0 6px;
+  transition: color 0.18s var(--ease), border-color 0.18s var(--ease), background-color 0.18s var(--ease);
 }
 .tbtn:hover { color: var(--amber); border-color: var(--amber); }
 .tbtn.on { color: var(--amber); border-color: var(--amber); }
@@ -223,12 +260,32 @@ button { font-family: var(--mono); }
   background: #000;
   overflow: hidden;
 }
-.tile-body iframe, .tile-body video, .tile-body .tw-slot {
+.tile-body iframe, .tile-body video, .tile-body .tw-slot, .tile-body .yt-slot {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   border: 0; background: #000;
 }
 .tile-body video { object-fit: contain; }
+/* tap-to-play veil: shown only when a Twitch tile's autoplay is blocked
+   and retries can't start it — the button is a real gesture, so it works */
+.tw-veil {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  animation: fade 0.25s var(--ease) both;
+}
+.tplay {
+  pointer-events: auto;
+  background: #0f1113; color: var(--amber);
+  border: 1px solid var(--amber);
+  font-family: var(--mono);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+  padding: 10px 18px; cursor: pointer;
+  animation: pop 0.32s var(--ease) both;
+}
+.tplay:hover { background: var(--amber); color: #111; }
+.tplay:active { transform: translateY(1px); }
 .tile-foot {
   display: flex; gap: 8px; align-items: center;
   padding: 3px 6px;
@@ -240,7 +297,21 @@ button { font-family: var(--mono); }
 }
 .tile-foot .aud-unmuted { color: var(--grn); font-weight: 700; }
 .tile-foot .aud-muted { color: var(--dim); }
-.tile-foot .push { margin-left: auto; }
+.tile-foot .push { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+/* foot nudge buttons: reorder fallback for touch / keyboard users */
+.fbtn {
+  background: transparent;
+  color: var(--faint);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  line-height: 1;
+  min-width: 22px;
+  height: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.fbtn:hover:not(:disabled) { color: var(--amber); border-color: var(--amber); }
+.fbtn:disabled { opacity: 0.3; cursor: default; }
 
 /* ── empty state: logo backdrop, minimal text ────── */
 .empty {
@@ -260,8 +331,17 @@ button { font-family: var(--mono); }
   opacity: 0.09;
   pointer-events: none;
   user-select: none;
+  animation: drift 14s ease-in-out infinite alternate;
 }
-.empty-inner { position: relative; text-align: center; padding: 24px; }
+@keyframes drift {
+  from { transform: translateY(-8px); }
+  to { transform: translateY(8px); }
+}
+.empty-inner { position: relative; text-align: center; padding: 24px; animation: rise 0.5s var(--ease) both; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); filter: blur(4px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
 .empty-code { color: var(--faint); font-size: 11px; letter-spacing: 0.3em; }
 .empty-title {
   font-size: clamp(22px, 3.6vw, 36px);
@@ -288,7 +368,7 @@ button { font-family: var(--mono); }
   z-index: 60;
   display: flex; flex-direction: column;
   transform: translateX(0);
-  transition: transform 0.15s linear;
+  transition: transform 0.32s var(--ease);
 }
 #mixer.closed { transform: translateX(102%); }
 .mixer-head {
@@ -314,6 +394,7 @@ button { font-family: var(--mono); }
   background: #0f1113; border: 1px solid var(--line2); color: var(--dim);
   font-size: 10px; font-weight: 700; padding: 5px 10px; cursor: pointer;
   letter-spacing: 0.08em;
+  transition: color 0.18s var(--ease), border-color 0.18s var(--ease);
 }
 .mute-btn.muted { color: var(--red); border-color: var(--red); }
 .mute-btn.live { color: var(--grn); border-color: var(--grn); }
@@ -334,15 +415,24 @@ input[type="range"]:disabled { accent-color: var(--faint); cursor: not-allowed; 
 /* ── modal ───────────────────────────────────────── */
 .modal {
   position: fixed; inset: 0; z-index: 70;
-  background: rgba(0,0,0,0.7);
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   display: flex; align-items: center; justify-content: center;
   padding: 16px;
+  animation: fade 0.25s var(--ease) both;
 }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 .modal.hidden { display: none; }
 .modal-box {
   background: var(--bg2); border: 2px solid var(--line2);
   max-width: 720px; width: 100%;
   max-height: 86vh; overflow: auto;
+  animation: pop 0.32s var(--ease) both;
+}
+@keyframes pop {
+  from { opacity: 0; transform: translateY(12px) scale(0.985); filter: blur(4px); }
+  to { opacity: 1; transform: none; filter: none; }
 }
 .modal-head {
   display: flex; justify-content: space-between; align-items: center;
@@ -387,19 +477,128 @@ input[type="range"]:disabled { accent-color: var(--faint); cursor: not-allowed; 
   border: 1px solid var(--red);
   border-left: 6px solid var(--red);
   padding: 10px 12px; font-size: 11px;
+  animation: toast-in 0.35s var(--ease) both;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-12px); filter: blur(4px); }
+  to { opacity: 1; transform: none; filter: none; }
 }
 .toast.ok { border-color: var(--grn); border-left-color: var(--grn); }
 .toast b { display: block; margin-bottom: 2px; }
 .toast span { color: var(--dim); }
+
+/* ── theater: chromeless canvas — just the streams ── */
+#app.theater {
+  background: #000;
+}
+#app.theater #topbar,
+#app.theater .logline,
+#app.theater #statusbar {
+  display: none;
+}
+#app.theater #gridWrap {
+  padding: 0;
+  background: #000;
+}
+#app.theater #grid {
+  gap: 0;
+}
+#app.theater .tile {
+  border: 0;
+  border-radius: 0;
+  animation: none;
+}
+#app.theater .tile.focused {
+  border: 0;
+  box-shadow: none;
+}
+#app.theater .tile-head,
+#app.theater .tile-foot {
+  display: none;
+}
+#app.theater .empty {
+  border: 0;
+  background: #000;
+}
+/* floating HUD: visible on mouse move, fades when idle */
+.theater-hud {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 17, 19, 0.88);
+  border: 1px solid var(--line2);
+  padding: 6px 8px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: opacity 0.3s var(--ease);
+  max-width: 94vw;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.hud-mode {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--amber);
+  font-weight: 800;
+  white-space: nowrap;
+}
+.hud-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line2);
+}
+#app.theater.idle-hide {
+  cursor: none;
+}
+#app.theater.idle-hide .theater-hud {
+  opacity: 0;
+  pointer-events: none;
+}
+#app.theater.idle-hide #mixer,
+#app.theater.idle-hide .modal {
+  cursor: auto;
+}
+/* true browser fullscreen: remove any leftover margin */
+#app:fullscreen #gridWrap {
+  padding: 0;
+}
 
 .hide-m { display: inline; }
 #statusbar a { color: var(--dim); text-decoration: none; }
 #statusbar a:hover { color: var(--amber); }
 @media (max-width: 760px) {
   .hide-m { display: none; }
-  #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; }
+  #grid.cols-2, #grid.cols-3, #grid.cols-4,
+  #grid.cols-man-2, #grid.cols-man-3 { grid-template-columns: 1fr; }
   #grid { grid-auto-rows: minmax(220px, 1fr); }
   .add-cluster { order: 3; flex-basis: 100%; }
+}
+
+/* ── 16:9 lock: tiles keep widescreen instead of stretching ──
+   (letterboxes the grid area; CSS-only, players untouched) */
+#app.lock16 #grid {
+  grid-auto-rows: auto;
+  align-content: center;
+}
+#app.lock16 .tile {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  max-width: calc((100dvh - 16px) * 16 / 9);
+  margin: 0 auto;
+}
+
+/* ── accessibility: kill motion when requested ───── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ── /guide: server-rendered content hub (SEO), same utilitarian system ── */

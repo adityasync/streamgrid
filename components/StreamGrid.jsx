@@ -7,14 +7,20 @@ import { buildShareHash, parseLocationHash } from "../lib/share";
 const MAX = 9;
 const LS_KEY = "streamgrid.v1";
 const LS_KEY_LEGACY = "multistream.v1";
-/* Demo: 24/7 animal streams, one per platform (verified at build time;
- * TikTok is a cat VOD — TikTok offers no live embed). */
+const LS_LAYOUT = "streamgrid.layout.v1";
+const COLS_ORDER = ["auto", "1", "2", "3"];
+/* Demo: 9x 24/7 animal streams — 3 Twitch + 3 Kick + 3 YouTube.
+ * All verified live at build time. Fills the whole grid. */
 const DEMO = [
   "https://www.youtube.com/watch?v=T4XZmMPQ9Kw", // Kitten Academy 24/7
   "https://www.twitch.tv/alveussanctuary", // Alveus sanctuary 24/7 cams
   "https://kick.com/untamedlivefrombackyard", // 24/7 backyard wildlife
-  "https://rumble.com/v78sqdq-mavis-farmacy-247-holler-radio-live-appalachian-farm-cam-chickens-ducks-and.html", // 24/7 farm cam
-  "https://www.tiktok.com/@funnycats0ftiktok/video/7345101300750748970", // cat VOD
+  "https://www.youtube.com/watch?v=J7ZrIDvqlic", // Brooks Falls bears 24/7
+  "https://www.twitch.tv/onlycatpets", // 24/7 cat cams
+  "https://kick.com/cuteavalanche", // 24/7 foster kittens
+  "https://www.youtube.com/watch?v=cTsjMtjRLCo", // Katmai river bears 24/7
+  "https://www.twitch.tv/gardenzoo", // Garden shelter 24/7
+  "https://kick.com/furball-farm", // Cat sanctuary 24/7
 ];
 
 let uidCounter = 0;
@@ -41,6 +47,10 @@ export default function StreamGrid() {
   const [focusUid, setFocusUid] = useState(null);
   const [mixerOpen, setMixerOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [theater, setTheater] = useState(false);
+  const [chromeHidden, setChromeHidden] = useState(false);
+  const [colsMode, setColsMode] = useState("auto");
+  const [lock16, setLock16] = useState(false);
   const [input, setInput] = useState("");
   const [log, setLog] = useState({
     text: "READY. PASTE A STREAM URL ABOVE. ALL STREAMS START MUTED (BROWSER AUTOPLAY POLICY) — FOCUS A TILE OR USE THE MIXER TO UNMUTE.",
@@ -48,10 +58,16 @@ export default function StreamGrid() {
   });
   const [toasts, setToasts] = useState([]);
   const [parents, setParents] = useState(["localhost", "127.0.0.1"]);
+  const [twBlocked, setTwBlocked] = useState({}); // uid -> true while a Twitch tile needs a tap to play
+  const [dragUid, setDragUid] = useState(null);
+  const [dropUid, setDropUid] = useState(null);
 
   const streamsRef = useRef([]);
   const focusRef = useRef(null);
   const mixerRef = useRef(false);
+  const theaterRef = useRef(false);
+  const dragUidRef = useRef(null);
+  const idleTimer = useRef(null);
   const ytPlayers = useRef(new Map());
   const twPlayers = useRef(new Map());
   const videoEls = useRef(new Map());
@@ -61,10 +77,13 @@ export default function StreamGrid() {
   const hlsLib = useRef(null);
   const ytReady = useRef(false);
   const loaded = useRef(false);
+  const twTimers = useRef(new Map());
+  const twPending = useRef(new Set()); // uids with a deferred Twitch construction queued
 
   streamsRef.current = streams;
   focusRef.current = focusUid;
   mixerRef.current = mixerOpen;
+  theaterRef.current = theater;
 
   /* ── toast helper ─────────────────────────────────────────── */
   const pushToast = useCallback((title, msg, ok = false) => {
@@ -150,6 +169,15 @@ export default function StreamGrid() {
       } catch {
         /* ignore corrupt storage */
       }
+      try {
+        const layout = JSON.parse(localStorage.getItem(LS_LAYOUT) || "null");
+        if (layout) {
+          if (COLS_ORDER.includes(layout.cols)) setColsMode(layout.cols);
+          if (layout.ar === 1) setLock16(true);
+        }
+      } catch {
+        /* ignore corrupt layout */
+      }
     }
 
     // hls.js (lazy, client-only)
@@ -215,6 +243,16 @@ export default function StreamGrid() {
     }
   }, [streams]);
 
+  /* ── persist layout override (columns + 16:9 lock) ─────────── */
+  useEffect(() => {
+    if (!loaded.current) return;
+    try {
+      localStorage.setItem(LS_LAYOUT, JSON.stringify({ cols: colsMode, ar: lock16 ? 1 : 0 }));
+    } catch {
+      /* non-fatal */
+    }
+  }, [colsMode, lock16]);
+
   /* ── player constructors ──────────────────────────────────── */
   function currentOf(uid) {
     return streamsRef.current.find((s) => s.uid === uid);
@@ -226,7 +264,20 @@ export default function StreamGrid() {
     const el = document.getElementById(`yt-${s.uid}`);
     if (!el) return;
     try {
+      // The div is a placeholder — the IFrame API builds the iframe itself
+      // with the right host/origin. Wrapping a hand-made <iframe> instead
+      // races the API's polling loop and logs postMessage target-origin
+      // mismatches.
       const p = new window.YT.Player(`yt-${s.uid}`, {
+        host: "https://www.youtube-nocookie.com",
+        videoId: s.data.videoId,
+        playerVars: {
+          autoplay: 1,
+          mute: 1, // embed-level mute never changes; unmute goes through the API
+          rel: 0,
+          playsinline: 1,
+          origin: window.location.origin,
+        },
         events: {
           onReady: (e) => {
             const cur = currentOf(s.uid);
@@ -237,6 +288,10 @@ export default function StreamGrid() {
                 e.target.setVolume(cur?.volume ?? 70);
               }
             } catch {}
+            // autoplay param can stall (throttled tab, slow load) — force it
+            try {
+              e.target.playVideo();
+            } catch {}
           },
         },
       });
@@ -244,27 +299,176 @@ export default function StreamGrid() {
     } catch {}
   }
 
-  function ensureTW(s) {
+  /* Patch the iframe that Twitch's v1.js builds: it emits both
+   * allow="..." and the legacy allowfullscreen attribute, which makes
+   * Chrome log "Allow attribute will take precedence over
+   * 'allowfullscreen'". Fullscreen keeps working through the allow list
+   * alone. (Our own iframes never set both — this is purely Twitch's SDK.) */
+  function fixTwIframe(uid) {
+    try {
+      const f = document.getElementById(`tw-${uid}`)?.querySelector("iframe");
+      if (!f) return;
+      const allow = f.getAttribute("allow") || "";
+      if (!/(^|;\s*)fullscreen(\s*;|$)/i.test(allow)) {
+        f.setAttribute("allow", `${allow.replace(/;?\s*$/, "")}; fullscreen`);
+      }
+      f.removeAttribute("allowfullscreen");
+      f.removeAttribute("allowFullscreen");
+    } catch {}
+  }
+
+  /* True while the tile is still animating in (tile-in starts at opacity 0)
+   * or laid out at 0x0 — constructing a Twitch player in either state fails
+   * Twitch's visibility/size gate ("style visibility, size") for that
+   * player, so the caller must defer construction instead. */
+  function twNeedsDefer(el) {
+    try {
+      const anims = el.closest?.(".tile")?.getAnimations?.() || [];
+      if (anims.some((a) => a.playState === "running")) return true;
+    } catch {}
+    try {
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return true;
+    } catch {}
+    return false;
+  }
+
+  function queueTwRetry(s) {
+    if (twPending.current.has(s.uid)) return;
+    twPending.current.add(s.uid);
+    setTimeout(() => {
+      twPending.current.delete(s.uid);
+      const cur = currentOf(s.uid);
+      if (cur && isTwitchApi(cur) && !twPlayers.current.has(cur.uid)) ensureTW(cur, { defer: true });
+    }, 750);
+  }
+
+  function ensureTW(s, { defer = false } = {}) {
     if (!window.Twitch?.Player) return;
     if (twPlayers.current.has(s.uid)) return;
     const el = document.getElementById(`tw-${s.uid}`);
     if (!el) return;
+    // Hidden tiles (focus mode sets display:none) always fail Twitch's
+    // visibility check — don't burn a player on them. The sync effect
+    // re-runs on focus/grid/mute changes and constructs them once visible.
+    try {
+      if (el.closest(".hidden-tile")) return;
+    } catch {}
+    if (!defer && twNeedsDefer(el)) {
+      queueTwRetry(s);
+      return;
+    }
     try {
       const opts = {
         width: "100%",
         height: "100%",
         autoplay: true,
         muted: true,
+        // Don't let v1.js emit the legacy allowfullscreen attribute next to
+        // allow="..." (Chrome logs a precedence warning for that pair).
+        // fixTwIframe() keeps fullscreen enabled via the allow list.
+        allowfullscreen: false,
         parent: parents.length ? parents : ["localhost"],
       };
       if (s.data.kind === "video") opts.video = s.data.id;
       else opts.channel = s.data.channel;
       const p = new window.Twitch.Player(`tw-${s.uid}`, opts);
-      try {
-        p.setVolume((currentOf(s.uid)?.volume ?? 70) / 100);
-      } catch {}
       twPlayers.current.set(s.uid, p);
+      fixTwIframe(s.uid);
+      // Self-healing autoplay: Twitch reports PLAYBACK_BLOCKED when the
+      // browser stalls autoplay. Retry verified playback, and if it still
+      // won't start, raise the tap-to-play veil (a real button = a real
+      // user gesture, which always unblocks playback).
+      const P = window.Twitch.Player;
+      const EV = {
+        ready: P.READY || "ready",
+        playing: P.PLAYING || "playing",
+        blocked: P.PLAYBACK_BLOCKED || "playbackBlocked",
+        online: P.ONLINE || "online",
+      };
+      // NOTE: nothing is commanded before READY — play()/setVolume() issued
+      // earlier throw "Cannot handle commands before the video player is
+      // initialized" and never take effect.
+      try {
+        p.addEventListener(EV.ready, () => {
+          fixTwIframe(s.uid);
+          try {
+            p.setVolume((currentOf(s.uid)?.volume ?? 70) / 100);
+          } catch {}
+          attemptTwPlay(s.uid, 5);
+        });
+      } catch {}
+      try {
+        p.addEventListener(EV.blocked, () => {
+          markTwBlocked(s.uid, true);
+          attemptTwPlay(s.uid, 3);
+        });
+      } catch {}
+      try {
+        p.addEventListener(EV.playing, () => {
+          clearTwTimer(s.uid);
+          markTwBlocked(s.uid, false);
+        });
+      } catch {}
+      try {
+        p.addEventListener(EV.online, () => {
+          markTwBlocked(s.uid, false);
+          attemptTwPlay(s.uid, 3);
+        });
+      } catch {}
+      // NOTE: PAUSE is deliberately ignored — a user pausing via Twitch's
+      // own controls must never be force-resumed.
     } catch {}
+  }
+
+  function clearTwTimer(uid) {
+    const t = twTimers.current.get(uid);
+    if (t) {
+      clearTimeout(t);
+      twTimers.current.delete(uid);
+    }
+  }
+
+  function markTwBlocked(uid, on) {
+    setTwBlocked((prev) => {
+      if (!!prev[uid] === on) return prev;
+      const next = { ...prev };
+      if (on) next[uid] = true;
+      else delete next[uid];
+      return next;
+    });
+  }
+
+  /* (re)start a Twitch tile, then verify via isPaused(); retries heal
+   * autoplay races, the veil covers anything retries can't fix. */
+  function attemptTwPlay(uid, tries = 3) {
+    clearTwTimer(uid);
+    const p = twPlayers.current.get(uid);
+    const s = currentOf(uid);
+    if (!p || !s || !isTwitchApi(s)) return;
+    try {
+      p.setMuted(s.muted !== false);
+    } catch {}
+    try {
+      p.play();
+    } catch {}
+    if (tries <= 0) return;
+    twTimers.current.set(
+      uid,
+      setTimeout(() => {
+        if (!currentOf(uid) || !twPlayers.current.get(uid)) return;
+        let paused = true;
+        try {
+          paused = twPlayers.current.get(uid).isPaused();
+        } catch {}
+        if (paused) {
+          markTwBlocked(uid, true);
+          attemptTwPlay(uid, tries - 1);
+        } else {
+          markTwBlocked(uid, false);
+        }
+      }, 1500)
+    );
   }
 
   function setupVideo(s) {
@@ -303,7 +507,14 @@ export default function StreamGrid() {
   useEffect(() => {
     for (const s of streams) {
       if (isYouTube(s)) ensureYT(s);
-      else if (isTwitchApi(s)) ensureTW(s);
+      else if (isTwitchApi(s)) {
+        // ensureTW itself skips hidden tiles; the guard here just avoids
+        // queueing deferred retries for tiles that can't play yet.
+        try {
+          if (document.getElementById(`tw-${s.uid}`)?.closest(".hidden-tile")) continue;
+        } catch {}
+        ensureTW(s);
+      }
       else if (isVideo(s)) setupVideo(s);
     }
     // cleanup players of removed tiles
@@ -316,8 +527,14 @@ export default function StreamGrid() {
         ytPlayers.current.delete(uid);
       }
     }
-    for (const [uid] of twPlayers.current) {
-      if (!alive.has(uid)) twPlayers.current.delete(uid);
+    for (const [uid, p] of twPlayers.current) {
+      if (!alive.has(uid)) {
+        clearTwTimer(uid);
+        try {
+          p?.pause?.();
+        } catch {}
+        twPlayers.current.delete(uid);
+      }
     }
     for (const [uid, h] of hlsObjs.current) {
       if (!alive.has(uid)) {
@@ -330,6 +547,17 @@ export default function StreamGrid() {
     for (const [uid] of videoEls.current) {
       if (!alive.has(uid)) videoEls.current.delete(uid);
     }
+    setTwBlocked((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const k of Object.keys(next)) {
+        if (!alive.has(k)) {
+          delete next[k];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streams, parents]);
 
@@ -338,9 +566,24 @@ export default function StreamGrid() {
     try {
       if (isYouTube(s)) {
         const p = ytPlayers.current.get(s.uid);
-        if (p?.mute) (muted ? p.mute() : p.unMute());
+        if (!p) return;
+        if (muted) p.mute();
+        else {
+          p.unMute();
+          // unmuting a stalled player doesn't resume it — force play
+          try {
+            p.playVideo();
+          } catch {}
+        }
       } else if (isTwitchApi(s)) {
-        twPlayers.current.get(s.uid)?.setMuted(muted);
+        const p = twPlayers.current.get(s.uid);
+        if (!p) return;
+        p.setMuted(muted);
+        if (!muted) {
+          try {
+            p.play();
+          } catch {}
+        }
       } else if (isVideo(s)) {
         const el = videoEls.current.get(s.uid);
         if (el) {
@@ -434,6 +677,141 @@ export default function StreamGrid() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* reload ONE tile only — every other player is untouched (no grid rebuild) */
+  const refreshTile = useCallback(
+    (uid) => {
+      const s = currentOf(uid);
+      if (!s) return;
+      const idx = streamsRef.current.findIndex((x) => x.uid === uid);
+      const tag = `FEED ${String(idx + 1).padStart(2, "0")}`;
+      if (isYouTube(s)) {
+        try {
+          const p = ytPlayers.current.get(uid);
+          if (p?.loadVideoById) {
+            try {
+              p.loadVideoById(s.data.videoId);
+            } catch {
+              try { p.playVideo?.(); } catch {}
+            }
+            try {
+              if (s.muted) p.mute?.();
+              else {
+                p.unMute?.();
+                p.setVolume?.(s.volume ?? 70);
+              }
+            } catch {}
+            say(`${tag} RELOADED — OTHERS UNTOUCHED.`);
+            return;
+          }
+        } catch {}
+        // fallback: destroy + rebuild that player only
+        try {
+          ytPlayers.current.get(uid)?.destroy?.();
+        } catch {}
+        ytPlayers.current.delete(uid);
+        setTimeout(() => {
+          const cur = currentOf(uid);
+          if (cur) ensureYT(cur);
+        }, 60);
+        say(`${tag} PLAYER REBUILT — OTHERS UNTOUCHED.`);
+        return;
+      }
+      if (isTwitchApi(s)) {
+        clearTwTimer(uid);
+        markTwBlocked(uid, false);
+        try {
+          twPlayers.current.get(uid)?.pause?.();
+        } catch {}
+        twPlayers.current.delete(uid);
+        try {
+          const el = document.getElementById(`tw-${uid}`);
+          if (el) el.innerHTML = "";
+        } catch {}
+        setTimeout(() => {
+          const cur = currentOf(uid);
+          if (cur && isTwitchApi(cur)) ensureTW(cur, { defer: true });
+        }, 80);
+        say(`${tag} RELOADED — OTHERS UNTOUCHED.`);
+        return;
+      }
+      if (isVideo(s)) {
+        try {
+          const h = hlsObjs.current.get(uid);
+          if (h) {
+            try { h.destroy(); } catch {}
+            hlsObjs.current.delete(uid);
+          }
+        } catch {}
+        try {
+          const el = videoEls.current.get(uid);
+          if (el) delete el.dataset.hlsBound;
+        } catch {}
+        setTimeout(() => {
+          const cur = currentOf(uid);
+          if (cur) setupVideo(cur);
+        }, 60);
+        say(`${tag} RELOADED — OTHERS UNTOUCHED.`);
+        return;
+      }
+      // mute-only iframes: bump nonce → React remounts THAT iframe alone
+      setStreams((prev) => prev.map((x) => (x.uid === uid ? { ...x, nonce: (x.nonce || 0) + 1 } : x)));
+      say(`${tag} RELOADED — OTHERS UNTOUCHED.`);
+    },
+    [say]
+  );
+
+  /* reorder: keys 1–9 follow the new order; focus (by uid) is preserved;
+   * persist effect saves the new order automatically. Tiles stay mounted
+   * (React key = uid), so players are moved, never rebuilt. */
+  const moveTile = useCallback(
+    (uid, dir) => {
+      const list = streamsRef.current;
+      const i = list.findIndex((x) => x.uid === uid);
+      if (i < 0) return;
+      const j = i + dir;
+      if (j < 0 || j >= list.length) return;
+      const next = [...list];
+      const [m] = next.splice(i, 1);
+      next.splice(j, 0, m);
+      streamsRef.current = next;
+      setStreams(next);
+      say(`MOVED ${m.label} → POSITION ${j + 1}. KEYS 1–9 FOLLOW NEW ORDER.`);
+    },
+    [say]
+  );
+
+  const dropReorder = useCallback(
+    (targetUid) => {
+      const fromUid = dragUidRef.current;
+      if (!fromUid || fromUid === targetUid) return;
+      const list = streamsRef.current;
+      const from = list.findIndex((x) => x.uid === fromUid);
+      let to = list.findIndex((x) => x.uid === targetUid);
+      if (from < 0 || to < 0) return;
+      const next = [...list];
+      const [m] = next.splice(from, 1);
+      to = next.findIndex((x) => x.uid === targetUid);
+      next.splice(to + 1, 0, m);
+      streamsRef.current = next;
+      setStreams(next);
+      say(`MOVED ${m.label} → POSITION ${to + 2}. KEYS 1–9 FOLLOW NEW ORDER.`);
+    },
+    [say]
+  );
+
+  /* layout override: cycle AUTO → 1 → 2 → 3 → AUTO. CSS-only, players untouched. */
+  const cycleCols = useCallback(() => {
+    setColsMode((prev) => {
+      const next = COLS_ORDER[(COLS_ORDER.indexOf(prev) + 1) % COLS_ORDER.length];
+      say(
+        next === "auto"
+          ? "COLUMNS: AUTO — GRID PICKS 1/2/3 BY FEED COUNT."
+          : `COLUMNS: ${next} — MANUAL OVERRIDE. PRESS L TO CYCLE, SAVED.`
+      );
+      return next;
+    });
+  }, [say]);
+
   const focusFeed = useCallback(
     (uid) => {
       const list = streamsRef.current;
@@ -455,6 +833,12 @@ export default function StreamGrid() {
       );
       const idx = list.findIndex((s) => s.uid === uid);
       const t = list[idx];
+      // A focused tile is full-size, so a Twitch tile that was gated on
+      // size retries now with room to pass. Delay past the reflow so the
+      // player measures the visible layout, not the grid one.
+      try {
+        if (t && isTwitchApi(t)) setTimeout(() => attemptTwPlay(t.uid, 3), 350);
+      } catch {}
       say(`FOCUSED ${String(idx + 1).padStart(2, "0")}: ${t.label} — ${t.title}. AUDIO SOLOED. PRESS 0 FOR GRID.`);
     },
     [say]
@@ -530,7 +914,7 @@ export default function StreamGrid() {
     setStreams([...streamsRef.current]);
     say(
       added
-        ? `ANIMAL DEMO: ${added} FEED(S) — KITTENS, SANCTUARY, BACKYARD WILDLIFE, FARM CAM + CAT VOD. PRESS 1–${added} TO FOCUS + SOLO, A FOR MIXER.`
+        ? `ANIMAL DEMO: FULL GRID — ${added} LIVE 24/7 FEEDS (3 TWITCH + 3 KICK + 3 YOUTUBE). PRESS 1–${added} TO FOCUS + SOLO, A FOR MIXER.`
         : "DEMO FEEDS ALREADY ON GRID."
     );
   }, [say]);
@@ -586,7 +970,14 @@ export default function StreamGrid() {
       const k = e.key;
 
       if (k === "Escape") {
-        if (helpOpen) setHelpOpen(false);
+        if (theaterRef.current) {
+          setTheater(false);
+          setChromeHidden(false);
+          try {
+            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+          } catch {}
+        }
+        else if (helpOpen) setHelpOpen(false);
         else if (mixerRef.current) setMixerOpen(false);
         else if (focusRef.current !== null) toGrid(true);
         return;
@@ -608,6 +999,37 @@ export default function StreamGrid() {
         muteAll();
         return;
       }
+      if (lower === "f" || lower === "t") {
+        setTheater((v) => {
+          if (v) {
+            setChromeHidden(false);
+            try {
+              if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+            } catch {}
+          }
+          return !v;
+        });
+        return;
+      }
+      if (lower === "r") {
+        const uid = focusRef.current;
+        if (uid && streamsRef.current.some((s) => s.uid === uid)) refreshTile(uid);
+        return;
+      }
+      if (lower === "l") {
+        cycleCols();
+        return;
+      }
+      if (k === "ArrowLeft" || k === "ArrowRight") {
+        // range sliders keep native ←/→ volume behavior
+        if (t && t.tagName === "INPUT" && t.type === "range") return;
+        const uid = focusRef.current;
+        if (uid) {
+          e.preventDefault();
+          moveTile(uid, k === "ArrowLeft" ? -1 : 1);
+        }
+        return;
+      }
       if (k >= "0" && k <= "9") {
         const list = streamsRef.current;
         if (!list.length) return;
@@ -625,11 +1047,20 @@ export default function StreamGrid() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [addStream, focusFeed, toGrid, muteAll, helpOpen]);
+  }, [addStream, focusFeed, toGrid, muteAll, refreshTile, moveTile, cycleCols, helpOpen]);
 
   /* ── derived ──────────────────────────────────────────────── */
   const n = streams.length;
-  const colsClass = n <= 1 ? "cols-1" : n === 2 ? "cols-2" : n === 3 ? "cols-3" : "cols-4";
+  const colsClass =
+    colsMode !== "auto"
+      ? `cols-man-${colsMode}`
+      : n <= 1
+        ? "cols-1"
+        : n === 2
+          ? "cols-2"
+          : n === 3
+            ? "cols-3"
+            : "cols-4";
   const liveCount = streams.filter((s) => !s.muted).length;
   const audioSummary =
     n === 0 ? "AUDIO: —" : liveCount === 0 ? "AUDIO: ALL MUTED" : focusUid ? "AUDIO: SOLO" : `AUDIO: ${liveCount}/${n} LIVE`;
@@ -641,6 +1072,57 @@ export default function StreamGrid() {
       else el?.requestFullscreen?.();
     } catch {}
   }
+
+  /* ── theater: chromeless canvas (no header/log/statusbar/tile chrome).
+   * CSS-only by default so tabs stay visible; `withBrowserFS` upgrades it
+   * to true browser fullscreen for TV / couch viewing. Players are never
+   * rebuilt — tiles stay mounted, so no stream reloads on toggle. */
+  const setTheaterMode = useCallback((on) => {
+    setTheater(on);
+    setChromeHidden(false);
+    try {
+      if (idleTimer.current) clearTimeout(idleTimer.current);
+    } catch {}
+    if (!on) {
+      try {
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      } catch {}
+    }
+  }, []);
+
+  const toggleTheater = useCallback(() => {
+    setTheaterMode(!theaterRef.current);
+  }, [setTheaterMode]);
+
+  const toggleBrowserFS = useCallback(() => {
+    try {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else document.getElementById("app")?.requestFullscreen?.().catch(() => {});
+    } catch {}
+  }, []);
+
+  /* auto-hide the floating HUD + cursor after 2.5s idle in theater */
+  useEffect(() => {
+    if (!theater) return;
+    function poke() {
+      setChromeHidden(false);
+      try {
+        if (idleTimer.current) clearTimeout(idleTimer.current);
+      } catch {}
+      idleTimer.current = setTimeout(() => setChromeHidden(true), 2500);
+    }
+    poke();
+    window.addEventListener("mousemove", poke);
+    window.addEventListener("touchstart", poke, { passive: true });
+    window.addEventListener("keydown", poke);
+    return () => {
+      window.removeEventListener("mousemove", poke);
+      window.removeEventListener("touchstart", poke);
+      try {
+        if (idleTimer.current) clearTimeout(idleTimer.current);
+      } catch {}
+    };
+  }, [theater]);
 
   function renderBody(s) {
     if (isVideo(s)) {
@@ -663,29 +1145,24 @@ export default function StreamGrid() {
       return <div id={`tw-${s.uid}`} className="tw-slot" title={`${s.label} — ${s.title}`} />;
     }
     if (isYouTube(s)) {
-      // src stays mute=1 forever — unmute happens through the YT API, so no reload
-      return (
-        <iframe
-          id={`yt-${s.uid}`}
-          src={buildEmbedSrc(s, true, parents)}
-          title={`${s.label} — ${s.title}`}
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          allowFullScreen
-        />
-      );
+      // Placeholder div — the YT IFrame API builds the iframe itself with
+      // the correct host/origin (see ensureYT playerVars). Our iframes keep
+      // `fullscreen` inside `allow` and never set allowFullScreen, so the
+      // React "Allow attribute will take precedence" warning can't fire.
+      return <div id={`yt-${s.uid}`} className="yt-slot" title={`${s.label} — ${s.title}`} />;
     }
     return (
       <iframe
+        key={s.nonce || 0}
         src={buildEmbedSrc(s, s.muted, parents)}
         title={`${s.label} — ${s.title}`}
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-        allowFullScreen
       />
     );
   }
 
   return (
-    <div id="app">
+    <div id="app" className={`${theater ? "theater" : ""}${theater && chromeHidden ? " idle-hide" : ""}${lock16 ? " lock16" : ""}`}>
       <h1
         style={{
           position: "absolute",
@@ -729,12 +1206,15 @@ export default function StreamGrid() {
           <button className="btn btn-primary" onClick={() => addStream(input)} title="Add stream (Enter)">
             [+] ADD
           </button>
-          <button className="btn" onClick={loadDemo} title="Load 5 live animal demo streams (one per platform)">
+          <button className="btn" onClick={loadDemo} title="Load 9 live 24/7 animal streams (3 Twitch + 3 Kick + 3 YouTube)">
             DEMO
           </button>
         </div>
 
         <div className="top-actions">
+          <button className={`btn${theater ? " btn-primary" : ""}`} onClick={toggleTheater} title="Chromeless canvas — hide header/log/statusbar (F)">
+            [F] THEATER
+          </button>
           <button className="btn" onClick={() => setMixerOpen((v) => !v)} title="Audio mixer (A)">
             [A] MIXER <span id="mixerDot" className={`dot${mixerOpen ? "" : " hidden"}`} />
           </button>
@@ -743,6 +1223,25 @@ export default function StreamGrid() {
           </button>
           <button className="btn" onClick={() => toGrid(true)} title="Grid view (0)">
             [0] GRID
+          </button>
+          <button
+            className={`btn${colsMode !== "auto" ? " btn-primary" : ""}`}
+            onClick={cycleCols}
+            title="Column override: AUTO → 1 → 2 → 3 (L). Fixes awkward auto-grid at 5–7 feeds."
+          >
+            [L] COLS:{colsMode === "auto" ? "AUTO" : colsMode}
+          </button>
+          <button
+            className={`btn${lock16 ? " btn-primary" : ""}`}
+            onClick={() => {
+              setLock16((v) => {
+                say(v ? "ASPECT: STRETCH — TILES FILL THE VIEWPORT." : "ASPECT: 16:9 LOCK — TILES KEEP WIDESCREEN, LETTERBOXED. SAVED.");
+                return !v;
+              });
+            }}
+            title="Lock tiles to 16:9 instead of stretching to fill (saved)"
+          >
+            16:9
           </button>
           <button className="btn" onClick={shareGrid} title="Copy shareable link for this grid (no account, no database)">
             SHARE
@@ -774,10 +1273,45 @@ export default function StreamGrid() {
             return (
               <section
                 key={s.uid}
-                className={`tile${focused ? " focused" : ""}${hidden ? " hidden-tile" : ""}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDropUid((prev) => (prev === s.uid ? prev : s.uid));
+                }}
+                onDragLeave={() => {
+                  setDropUid((prev) => (prev === s.uid ? null : prev));
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  dropReorder(s.uid);
+                  setDropUid(null);
+                  setDragUid(null);
+                  dragUidRef.current = null;
+                }}
+                className={`tile${focused ? " focused" : ""}${hidden ? " hidden-tile" : ""}${dragUid === s.uid ? " dragging" : ""}${dropUid === s.uid && dragUid !== s.uid ? " drop-target" : ""}`}
+                style={{ animationDelay: `${Math.min(i, 8) * 70}ms` }}
                 aria-label={`Feed ${i + 1}: ${s.label} ${s.title}`}
               >
                 <div className="tile-head">
+                  <span
+                    className="drag-handle"
+                    draggable
+                    title="Drag to reorder (or use ‹ › below)"
+                    onDragStart={(e) => {
+                      dragUidRef.current = s.uid;
+                      setDragUid(s.uid);
+                      try {
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", s.uid);
+                      } catch {}
+                    }}
+                    onDragEnd={() => {
+                      setDropUid(null);
+                      setDragUid(null);
+                      dragUidRef.current = null;
+                    }}
+                  >
+                    ⠿
+                  </span>
                   <span className="idx">{String(i + 1).padStart(2, "0")}</span>
                   <span className="tplat">{s.label}</span>
                   <span className="tname">{s.title}</span>
@@ -797,6 +1331,9 @@ export default function StreamGrid() {
                     >
                       {focused ? "GRID" : "FOCUS"}
                     </button>
+                    <button className="tbtn" onClick={() => refreshTile(s.uid)} title="Reload this feed only — others keep playing (R on focused)">
+                      ↻
+                    </button>
                     <button className="tbtn" onClick={() => fullscreenTile(s.uid)} title="Fullscreen tile">
                       ⛶
                     </button>
@@ -813,13 +1350,32 @@ export default function StreamGrid() {
                   }}
                 >
                   {renderBody(s)}
+                  {twBlocked[s.uid] && isTwitchApi(s) && (
+                    <div className="tw-veil">
+                      <button
+                        className="tplay"
+                        onClick={() => attemptTwPlay(s.uid, 3)}
+                        title="Start playback (counts as a click, always works)"
+                      >
+                        ▶ TAP TO PLAY
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="tile-foot">
                   <span className={s.muted ? "aud-muted" : "aud-unmuted"}>
                     {s.muted ? "MUTED" : `VOL ${s.volume}`}
                   </span>
                   <span>{isFullAudio(s) ? "API: FULL" : "API: MUTE-ONLY*"}</span>
-                  <span className="push">KEY [{i + 1}] · {s.platform.toUpperCase()}</span>
+                  <span className="push">
+                    <button className="fbtn" onClick={() => moveTile(s.uid, -1)} disabled={i === 0} title={i === 0 ? "First position" : "Move left (← on focused)"} aria-label={`Move feed ${i + 1} left`}>
+                      ‹
+                    </button>
+                    <span> KEY [{i + 1}] · {s.platform.toUpperCase()} </span>
+                    <button className="fbtn" onClick={() => moveTile(s.uid, 1)} disabled={i === n - 1} title={i === n - 1 ? "Last position" : "Move right (→ on focused)"} aria-label={`Move feed ${i + 1} right`}>
+                      ›
+                    </button>
+                  </span>
                 </div>
               </section>
             );
@@ -834,7 +1390,7 @@ export default function StreamGrid() {
               <div className="empty-sub">
                 <b>ENTER</b> TO ADD · UP TO 9 · OR HIT <b>DEMO</b>
               </div>
-              <div className="empty-keys">1–9 FOCUS · A MIXER · ? MANUAL</div>
+              <div className="empty-keys">1–9 FOCUS · A MIXER · F THEATER · ? MANUAL</div>
             </div>
           </div>
         )}
@@ -942,7 +1498,13 @@ export default function StreamGrid() {
               </p>
               <p className="modal-note">
                 KEYS — <b>0</b> GRID · <b>1–9</b> FOCUS + SOLO · <b>A</b> MIXER · <b>M</b> MUTE-ALL ·{" "}
-                <b>ESC</b> EXIT. FOCUS NEVER REBUILDS THE GRID — TILES STAY MOUNTED, NO REFRESH.
+                <b>F</b> THEATER (CHROMELESS CANVAS) · <b>R</b> RELOAD FOCUSED TILE · <b>←/→</b> MOVE
+                FOCUSED TILE · <b>L</b> CYCLE COLUMNS (AUTO→1→2→3) · <b>ESC</b> EXIT. FOCUS NEVER REBUILDS THE GRID — TILES STAY MOUNTED, NO REFRESH.
+              </p>
+              <p className="modal-note">
+                LAYOUT — <b>COLS</b> FORCES 1/2/3 COLUMNS (AUTO PICKS BY FEED COUNT; 5–7 FEEDS OFTEN WANT
+                MANUAL 3). <b>16:9</b> LOCKS TILES TO WIDESCREEN INSTEAD OF STRETCHING. BOTH SAVED
+                LOCALLY, BOTH CSS-ONLY — NO STREAM RELOADS.
               </p>
               <p className="modal-note">
                 TWITCH PRE-ROLLS? THAT IS TWITCH, NOT US — THE OFFICIAL EMBED SERVES THE SAME ADS AS
@@ -963,14 +1525,34 @@ export default function StreamGrid() {
       <footer id="statusbar">
         <span>FEEDS: {n}</span>
         <span className="sep">|</span>
-        <span>{focusUid ? `MODE: FOCUS ${streams.findIndex((s) => s.uid === focusUid) + 1}` : "MODE: GRID"}</span>
+        <span>{theater ? "MODE: THEATER" : focusUid ? `MODE: FOCUS ${streams.findIndex((s) => s.uid === focusUid) + 1}` : "MODE: GRID"}</span>
         <span className="sep">|</span>
         <span>{audioSummary}</span>
         <span className="flex" />
-        <span className="dim hide-m">0 GRID · 1–9 FOCUS · A MIXER · M MUTE · ESC EXIT</span>
+        <span className="dim hide-m">0 GRID · 1–9 FOCUS · A MIXER · M MUTE · F THEATER · L COLS · ESC EXIT</span>
         <span className="sep">|</span>
         <a href="/guide" title="Multiview guide: platforms, shortcuts, sharing, troubleshooting">GUIDE</a>
       </footer>
+
+      {/* ══ THEATER HUD — floating controls, auto-hides when idle ══ */}
+      {theater && (
+        <div className="theater-hud" role="toolbar" aria-label="Theater controls">
+          <span className="hud-mode">THEATER · {n} FEED{n === 1 ? "" : "S"} · ESC EXITS</span>
+          <span className="hud-sep" />
+          <button className="btn btn-sm" onClick={() => toGrid(true)} title="Grid view (0)">
+            GRID
+          </button>
+          <button className="btn btn-sm" onClick={() => setMixerOpen((v) => !v)} title="Audio mixer (A)">
+            MIXER
+          </button>
+          <button className="btn btn-sm" onClick={toggleBrowserFS} title="True browser fullscreen">
+            ⛶ FULL
+          </button>
+          <button className="btn btn-sm btn-primary" onClick={() => setTheaterMode(false)} title="Exit theater (Esc)">
+            EXIT ✕
+          </button>
+        </div>
+      )}
 
       <div id="toasts">
         {toasts.map((t) => (
